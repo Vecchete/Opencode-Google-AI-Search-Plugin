@@ -1,65 +1,56 @@
 # Opencode Google AI Search Plugin
 
-An Opencode plugin that exposes a native tool (`google_ai_search_plus`) for querying Google AI Mode (aka Google SGE). It uses Playwright to load the AI panel directly and converts the full response into markdown with Turndown so the output renders just like the built-in `webfetch` tool.
+An Opencode plugin that exposes a native tool (`google_ai_search_plus`) for querying Google AI Mode. It uses Playwright to load the AI panel directly and converts the response into markdown with Turndown so the output renders like a normal OpenCode tool response.
 
 ## Features
 
-- Direct navigation to Google AI Mode with stealth browser headers.
-- Waits for the progressive response to stabilise before extraction.
+- Uses the current `@opencode-ai/plugin` custom-tool API.
+- Reuses a single Playwright browser session across requests.
+- Closes the shared browser automatically after 5 minutes of inactivity.
 - Captures headings, lists, tables, and sources from the AI panel.
-- Converts the response to markdown to avoid truncated tool output.
-- Provides rich metadata (response time, source count, table presence) for the assistant model.
+- Returns markdown plus structured metadata (response time, source count, table presence).
 
 ## Installation
 
-1. Clone or download this repository.
-2. Install dependencies and build the plugin:
+### Recommended: load directly from GitHub in OpenCode
 
-   ```bash
-   bun install
-   bun run build
-   ```
+Add the fork to your OpenCode config:
 
-   > Note: If you encounter TypeScript compilation errors, you may need to fix quote escaping issues in the source code.
+```json
+{
+  "plugin": [
+    "github:Vecchete/Opencode-Google-AI-Search-Plugin"
+  ]
+}
+```
 
-   > Playwright is declared as a peer dependency. Install it (and Chromium) in the same project that will host the plugin:
-   >
-   > ```bash
-   > bun install
-   > npx playwright install chromium
-   > ```
-   >
-   > Note: Use `npx` instead of `bunx` if bunx is not available.
+This package points its server entry directly at `src/index.ts`, so OpenCode can install it from GitHub without requiring a prebuilt `dist/` directory.
 
-3. Add the plugin to Opencode. You can either:
+### Local clone workflow
 
-   - Drop the built files into your project: copy the entire folder somewhere in your repo and add the relative path in `opencode.json`:
+If you prefer a local plugin checkout, clone the repo and point OpenCode at the local file:
 
-     ```json
-     {
-       "plugin": [
-         "file:///absolute/path/to/google_ai_search/dist/index.js"
-       ]
-     }
-     ```
+```json
+{
+  "plugin": [
+    "file:///absolute/path/to/Opencode-Google-AI-Search-Plugin/src/index.ts"
+  ]
+}
+```
 
-     > Important: Use absolute paths starting with `file:///` instead of relative paths to avoid module resolution issues.
+## Runtime requirements
 
-   - Or publish this package to npm (e.g. `npm publish`) and reference it by name:
+The plugin depends on Playwright and requires Chromium to be installed:
 
-     ```json
-     {
-       "plugin": [
-         "opencode-google-ai-search-plugin"
-       ]
-     }
-     ```
+```bash
+npx playwright install chromium
+```
 
-4. Restart Opencode. The new tool (`google_ai_search_plus`) will appear in the tool list.
+If Chromium is missing, the tool raises an explicit setup error.
 
 ## Usage
 
-Once the plugin is loaded, call the tool from any Opencode session:
+Once loaded, call the tool from any OpenCode session:
 
 ```text
 google_ai_search_plus "What is the difference between TypeScript and JavaScript?"
@@ -67,26 +58,24 @@ google_ai_search_plus "What is the difference between TypeScript and JavaScript?
 
 Parameters:
 
-| Name     | Type    | Description                                                       |
-|----------|---------|-------------------------------------------------------------------|
-| `query`  | string  | Question or topic to submit to Google AI Mode.                    |
-| `timeout`| number  | Optional timeout in seconds (default 30, max 120).                |
-| `followUp` | boolean | Treats the query as part of the same conversation (session reuse). |
-
-The tool returns a markdown-formatted answer plus metadata about the response, including source count and whether a comparison table was detected.
+| Name | Type | Description |
+|---|---|---|
+| `query` | string | Question or topic to submit to Google AI Mode. |
+| `timeout` | number | Optional timeout in seconds (default 30, max 120). |
+| `followUp` | boolean | Reuse the current AI Mode conversation instead of starting fresh. |
 
 ## Notes
 
-- Google frequently throttles automated traffic. If you see timeout or “blocking” errors, wait a few minutes or reduce query frequency.
-- The plugin stores no state; each call launches (or reuses) an isolated headless Chromium session via Playwright.
-- Formatting mirrors the built-in `webfetch` tool so Opencode renders the full AI answer without summarising it.
-- You can customise the tool ID by editing `src/index.ts` before publishing.
+- Google frequently throttles automated traffic. If you see timeout or blocking errors, wait a few minutes before retrying.
+- The plugin now reuses a singleton browser session to avoid repeated browser/profile creation on consecutive searches.
+- Idle sessions are cleaned up automatically after 5 minutes.
+- You can still customize the tool ID by editing `src/index.ts`.
 
 ## Development
 
-- `bun run build` compiles TypeScript to the `dist/` folder (ESM output with type declarations).
-- `bun run clean` removes the build artefacts.
-- Update the version in `package.json` before publishing to npm.
+- `bun run build` compiles TypeScript to `dist/`.
+- `bun run clean` removes build artefacts.
+- If you publish to npm later, keep the `./server` export pointing at the runtime entrypoint OpenCode should load.
 
 ## License
 
