@@ -71,9 +71,12 @@ const IDLE_TIMEOUT = 5 * 60 * 1000
 let globalManager: GoogleAIModeManager | null = null
 
 export function registerAbortCleanup(
-  signal: AbortSignal,
+  signal: AbortSignal | undefined | null,
   onAbort: () => void,
 ): () => void {
+  if (!signal || typeof (signal as AbortSignal).addEventListener !== "function") {
+    return () => {}
+  }
   signal.addEventListener("abort", onAbort, { once: true })
   return () => signal.removeEventListener("abort", onAbort)
 }
@@ -109,8 +112,15 @@ export const GoogleAISearchPlugin: Plugin = async () => {
             MAX_TIMEOUT,
           )
 
+          const ctxAbort = (ctx as { abort?: unknown }).abort
+          const abortSignal: AbortSignal =
+            ctxAbort &&
+            typeof (ctxAbort as AbortSignal).addEventListener === "function"
+              ? (ctxAbort as AbortSignal)
+              : new AbortController().signal
+
           globalManager.clearIdleTimer()
-          const disposeOnAbort = registerAbortCleanup(ctx.abort, () => {
+          const disposeOnAbort = registerAbortCleanup(abortSignal, () => {
             void globalManager?.dispose()
           })
 
@@ -119,7 +129,7 @@ export const GoogleAISearchPlugin: Plugin = async () => {
               args.query,
               args.followUp ?? false,
               timeoutMs,
-              ctx.abort,
+              abortSignal,
             )
 
             ctx.metadata({
