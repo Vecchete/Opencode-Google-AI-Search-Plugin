@@ -4,9 +4,10 @@ An Opencode plugin that exposes a native tool (`google_ai_search_plus`) for quer
 
 ## Features
 
-- Uses the current `@opencode-ai/plugin` custom-tool API.
+- Works with OpenCode 2 and with OpenCode 1 from 1.18.29: one default export carries the OpenCode 2 definition (`id` and `setup`) and the OpenCode 1 `server()` entry.
 - Reuses a single Playwright browser session across requests.
-- Closes the shared browser automatically after 5 minutes of inactivity.
+- Closes the shared browser automatically after 5 minutes of inactivity, and when OpenCode unloads the plugin.
+- Stops a running search when the session is stopped.
 - Captures headings, lists, tables, and sources from the AI panel.
 - Returns markdown plus structured metadata (response time, source count, table presence).
 
@@ -14,17 +15,25 @@ An Opencode plugin that exposes a native tool (`google_ai_search_plus`) for quer
 
 ### Recommended: load directly from GitHub in OpenCode
 
-Add the fork to your OpenCode config:
+With OpenCode 2:
+
+```bash
+opencode plugin add github:Vecchete/Opencode-Google-AI-Search-Plugin
+```
+
+or add it to the `plugins` array of your OpenCode config:
 
 ```json
 {
-  "plugin": [
+  "plugins": [
     "github:Vecchete/Opencode-Google-AI-Search-Plugin"
   ]
 }
 ```
 
-This package points its server entry directly at `src/index.ts`, so OpenCode can install it from GitHub without requiring a prebuilt `dist/` directory.
+OpenCode 1 reads the same entry from its `plugin` array, and OpenCode 2 still accepts that spelling.
+
+The package points its entry directly at `src/index.ts`, so OpenCode installs it from GitHub without a prebuilt `dist/` directory. It also has no `build`, `prepare` or install script on purpose: npm prepares a Git dependency that has one by running a nested install, and that nested install fails inside the npm OpenCode 2 bundles (`git dep preparation failed`). Compiling is a development step, `npm run compile`.
 
 ### Local clone workflow
 
@@ -32,7 +41,7 @@ If you prefer a local plugin checkout, clone the repo and point OpenCode at the 
 
 ```json
 {
-  "plugin": [
+  "plugins": [
     "file:///absolute/path/to/Opencode-Google-AI-Search-Plugin/src/index.ts"
   ]
 }
@@ -67,15 +76,17 @@ Parameters:
 ## Notes
 
 - Google frequently throttles automated traffic. If you see timeout or blocking errors, wait a few minutes before retrying.
-- The plugin now reuses a singleton browser session to avoid repeated browser/profile creation on consecutive searches.
+- The plugin reuses a singleton browser session to avoid repeated browser/profile creation on consecutive searches.
 - Idle sessions are cleaned up automatically after 5 minutes.
 - You can still customize the tool ID by editing `src/index.ts`.
 
 ## Development
 
-- `bun run build` compiles TypeScript to `dist/`.
-- `bun run clean` removes build artefacts.
-- If you publish to npm later, keep the `./server` export pointing at the runtime entrypoint OpenCode should load.
+- `npm install` installs the dependencies, including the type packages of both plugin APIs.
+- `npm run compile` compiles TypeScript to `dist/`.
+- `npm test` compiles and runs the tests under `tests/`.
+- `npm run clean` removes build artefacts.
+- If you publish to npm later, keep the `.` and `./server` exports pointing at the runtime entrypoint OpenCode should load.
 
 ## License
 

@@ -1,5 +1,4 @@
-import type { Plugin } from "@opencode-ai/plugin"
-import { tool } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode/plugin"
 import TurndownService from "turndown"
 
 type PlaywrightModule = typeof import("playwright")
@@ -64,9 +63,33 @@ type ExtractionResult = {
   }
 }
 
+type SearchArgs = {
+  query: string
+  timeout?: number
+  followUp?: boolean
+}
+
+type SearchOutcome = {
+  title: string
+  output: string
+  metadata: {
+    query: string
+    responseTime: number
+    sourceCount: number
+    hasTable: boolean
+  }
+}
+
 const DEFAULT_TIMEOUT = 30_000
 const MAX_TIMEOUT = 120_000
 const IDLE_TIMEOUT = 5 * 60 * 1000
+
+const TOOL_NAME = "google_ai_search_plus"
+const TOOL_DESCRIPTION =
+  "Search the web using Google's AI-powered search mode. This tool provides comprehensive, AI-enhanced search results with contextual information, summaries, and source references. Use this for web searches, current events, factual lookups, research questions, and any task that needs up-to-date information."
+const QUERY_DESCRIPTION = "Question or topic to submit to Google AI Mode"
+const TIMEOUT_DESCRIPTION = "Timeout in seconds (default: 30, max: 120)"
+const FOLLOW_UP_DESCRIPTION = "Treat the query as a follow-up in the same session"
 
 let globalManager: GoogleAIModeManager | null = null
 
@@ -81,96 +104,135 @@ export function registerAbortCleanup(
   return () => signal.removeEventListener("abort", onAbort)
 }
 
-export const GoogleAISearchPlugin: Plugin = async () => {
-  return {
-    tool: {
-      google_ai_search_plus: tool({
-        description:
-          "Search the web using Google's AI-powered search mode. This tool provides comprehensive, AI-enhanced search results with contextual information, summaries, and source references. Use this for web searches, current events, factual lookups, research questions, and any task that needs up-to-date information.",
-        args: {
-          query: tool.schema
-            .string()
-            .describe("Question or topic to submit to Google AI Mode"),
-          timeout: tool.schema
-            .number()
-            .min(5)
-            .max(120)
-            .optional()
-            .describe("Timeout in seconds (default: 30, max: 120)"),
-          followUp: tool.schema
-            .boolean()
-            .optional()
-            .describe("Treat the query as a follow-up in the same session"),
-        },
-        async execute(args, ctx) {
-          if (!globalManager) {
-            globalManager = new GoogleAIModeManager(await loadPlaywright())
-          }
+function toAbortSignal(candidate: unknown): AbortSignal {
+  return candidate && typeof (candidate as AbortSignal).addEventListener === "function"
+    ? (candidate as AbortSignal)
+    : new AbortController().signal
+}
 
-          const timeoutMs = Math.min(
-            (args.timeout ?? DEFAULT_TIMEOUT / 1000) * 1000,
-            MAX_TIMEOUT,
-          )
-
-          const ctxAbort = (ctx as { abort?: unknown }).abort
-          const abortSignal: AbortSignal =
-            ctxAbort &&
-            typeof (ctxAbort as AbortSignal).addEventListener === "function"
-              ? (ctxAbort as AbortSignal)
-              : new AbortController().signal
-
-          globalManager.clearIdleTimer()
-          const disposeOnAbort = registerAbortCleanup(abortSignal, () => {
-            void globalManager?.dispose()
-          })
-
-          try {
-            const result = await globalManager.query(
-              args.query,
-              args.followUp ?? false,
-              timeoutMs,
-              abortSignal,
-            )
-
-            ctx.metadata({
-              title: `Google AI: ${args.query}`,
-              metadata: {
-                query: args.query,
-                sourceCount: result.sources.count,
-                responseTime: result.metadata.responseTime,
-                hasTable: result.tableData.length > 0,
-              },
-            })
-
-            return {
-              output: formatAIResponse(result),
-              metadata: {
-                query: result.query,
-                responseTime: result.metadata.responseTime,
-                sourceCount: result.sources.count,
-                hasTable: result.tableData.length > 0,
-              },
-            }
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            if (
-              message.includes("Timeout") ||
-              message.includes("forSelector") ||
-              message.includes("blocking")
-            ) {
-              throw new Error(
-                "Google AI Mode unavailable: automated access is currently blocked. Try again in a few minutes.",
-              )
-            }
-            throw error
-          } finally {
-            disposeOnAbort()
-            globalManager?.startIdleTimer()
-          }
-        },
-      }),
-    },
+export async function runSearch(
+  args: SearchArgs,
+  signal: unknown,
+): Promise<SearchOutcome> {
+  if (!globalManager) {
+    globalManager = new GoogleAIModeManager(await loadPlaywright())
   }
+
+  const timeoutMs = Math.min(
+    (args.timeout ?? DEFAULT_TIMEOUT / 1000) * 1000,
+    MAX_TIMEOUT,
+  )
+  const abortSignal = toAbortSignal(signal)
+
+  globalManager.clearIdleTimer()
+  const disposeOnAbort = registerAbortCleanup(abortSignal, () => {
+    void globalManager?.dispose()
+  })
+
+  try {
+    const result = await globalManager.query(
+      args.query,
+      args.followUp ?? false,
+      timeoutMs,
+      abortSignal,
+    )
+
+    return {
+      title: `Google AI: ${args.query}`,
+      output: formatAIResponse(result),
+      metadata: {
+        query: result.query,
+        responseTime: result.metadata.responseTime,
+        sourceCount: result.sources.count,
+        hasTable: result.tableData.length > 0,
+      },
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (
+      message.includes("Timeout") ||
+      message.includes("forSelector") ||
+      message.includes("blocking")
+    ) {
+      throw new Error(
+        "Google AI Mode unavailable: automated access is currently blocked. Try again in a few minutes.",
+      )
+    }
+    throw error
+  } finally {
+    disposeOnAbort()
+    globalManager?.startIdleTimer()
+  }
+}
+
+// OpenCode 2 reads `id` and `setup`; the tool is registered through a
+// transform and stopped with the plugin.
+const plugin: Plugin.Plugin = {
+  id: "google-ai-search",
+  async setup(ctx) {
+    await ctx.tool.transform((editor) => {
+      editor.add({
+        name: TOOL_NAME,
+        description: TOOL_DESCRIPTION,
+        input: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: QUERY_DESCRIPTION },
+            timeout: {
+              type: "number",
+              minimum: 5,
+              maximum: 120,
+              description: TIMEOUT_DESCRIPTION,
+            },
+            followUp: { type: "boolean", description: FOLLOW_UP_DESCRIPTION },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+        async execute(input, context) {
+          const outcome = await runSearch(input as SearchArgs, context.signal)
+          return {
+            content: outcome.output,
+            metadata: { title: outcome.title, ...outcome.metadata },
+          }
+        },
+      })
+    })
+    return async () => {
+      await globalManager?.dispose()
+    }
+  },
+}
+
+// OpenCode 1 (1.18.29 and later) calls `server()` and ignores the rest. Its
+// plugin package is loaded only there, so OpenCode 2 does not need it.
+export default {
+  ...plugin,
+  async server() {
+    const { tool } = await import("@opencode-ai/plugin")
+    return {
+      tool: {
+        [TOOL_NAME]: tool({
+          description: TOOL_DESCRIPTION,
+          args: {
+            query: tool.schema.string().describe(QUERY_DESCRIPTION),
+            timeout: tool.schema
+              .number()
+              .min(5)
+              .max(120)
+              .optional()
+              .describe(TIMEOUT_DESCRIPTION),
+            followUp: tool.schema.boolean().optional().describe(FOLLOW_UP_DESCRIPTION),
+          },
+          async execute(args, ctx) {
+            const outcome = await runSearch(args, (ctx as { abort?: unknown }).abort)
+            ctx.metadata({ title: outcome.title, metadata: outcome.metadata })
+            return { output: outcome.output, metadata: outcome.metadata }
+          },
+        }),
+      },
+    }
+  },
 }
 
 async function loadPlaywright(): Promise<PlaywrightModule> {
